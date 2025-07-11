@@ -371,6 +371,57 @@ class MappedNameForwardFormat(MappedChannelName, ForwardFormatFilter):
         ForwardFormatFilter.__init__(self, format)
 
 
+class PremiumEmojiFilter(MessageFilter):
+    """Filter that preserves premium emojis (MessageEntityCustomEmoji) during forwarding.
+    
+    This filter ensures that custom emojis are preserved when messages are forwarded,
+    by maintaining all MessageEntityCustomEmoji entities in the message.
+    
+    Args:
+        preserve_premium_emojis (bool): Whether to preserve premium emojis.
+            Defaults to True.
+    """
+
+    def __init__(self, preserve_premium_emojis: bool = True) -> None:
+        self._preserve_premium_emojis = preserve_premium_emojis
+
+    async def _process_message(
+        self, message: EventMessage, event_type: Type[EventLike]
+    ) -> FilterResult[EventMessage]:
+        if not self._preserve_premium_emojis or not message.entities:
+            return FilterResult(FilterAction.CONTINUE, message)
+
+        # Ensure all MessageEntityCustomEmoji entities are preserved
+        if message.entities:
+            preserved_entities = []
+            for entity in message.entities:
+                if isinstance(entity, types.MessageEntityCustomEmoji):
+                    # Preserve the custom emoji entity
+                    preserved_entities.append(entity)
+                else:
+                    # Keep other entities as well
+                    preserved_entities.append(entity)
+            
+            # Update the message entities
+            message.entities = preserved_entities
+
+        return FilterResult(FilterAction.CONTINUE, message)
+
+    async def _process_album(
+        self, album: EventAlbumMessage, event_type: Type[EventLike]
+    ) -> FilterResult[EventAlbumMessage]:
+        if not self._preserve_premium_emojis:
+            return FilterResult(FilterAction.CONTINUE, album)
+
+        # Process each message in the album
+        for i, message in enumerate(album):
+            filter_action, album[i] = await self._process_message(message, event_type)
+            if filter_action is FilterAction.DISCARD:
+                return FilterResult(FilterAction.DISCARD, album)
+
+        return FilterResult(FilterAction.CONTINUE, album)
+
+
 class KeywordReplaceFilter(UpdateEntitiesParams, WordBoundaryRegex, MessageFilter):
     """Filter that maps keywords
     Args:

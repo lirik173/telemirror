@@ -158,6 +158,8 @@ class DirectionConfig:
     mode: Literal["copy", "forward"] = "copy"
     repeat_interval: Optional[int] = None  # repeat interval in seconds
     repeat_count: Optional[int] = None     # maximum number of repetitions
+    drop_author: bool = False              # hide forward author (може допомогти з премій емоджі)
+    preserve_premium_emojis: bool = True   # preserve premium emojis during forwarding
 
     def __repr__(self) -> str:
         return (
@@ -168,6 +170,8 @@ class DirectionConfig:
             f"{f'to_topic_id: {self.to_topic_id}, ' if self.to_topic_id else ''}"
             f"{f'repeat_interval: {self.repeat_interval}s, ' if self.repeat_interval else ''}"
             f"{f'repeat_count: {self.repeat_count}, ' if self.repeat_count else ''}"
+            f"drop_author: {self.drop_author}, "
+            f"preserve_premium_emojis: {self.preserve_premium_emojis}, "
             f"filters: {self.filters}"
         )
 
@@ -252,6 +256,12 @@ if YAML_CONFIG_ENV or os.path.exists(YAML_CONFIG_FILE):
                         repeat_count=direction.get(
                             "repeat_count", yaml_config.get("repeat_count", None)
                         ),
+                        drop_author=direction.get(
+                            "drop_author", yaml_config.get("drop_author", False)
+                        ),
+                        preserve_premium_emojis=direction.get(
+                            "preserve_premium_emojis", yaml_config.get("preserve_premium_emojis", True)
+                        ),
                     )
                 )
 
@@ -312,6 +322,8 @@ else:
                             to_topic_id=target_topic_id,
                             repeat_interval=repeat_interval,
                             repeat_count=repeat_count,
+                            drop_author=False,  # За замовчуванням False для env конфігурації
+                            preserve_premium_emojis=True, # За замовчуванням True для env конфігурації
                         )
                     )
 

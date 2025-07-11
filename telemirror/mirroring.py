@@ -166,6 +166,8 @@ class EventProcessor(CopyEventMessage):
                             entity=outgoing_chat,
                             messages=message,
                             reply_to_topic_id=config.to_topic_id,
+                            drop_author=config.drop_author,
+                            preserve_premium_emojis=config.preserve_premium_emojis,
                         )
                     )
                 except Exception as e:
@@ -306,6 +308,8 @@ class EventProcessor(CopyEventMessage):
                             entity=outgoing_chat,
                             messages=album,
                             reply_to_topic_id=config.to_topic_id,
+                            drop_author=config.drop_author,
+                            preserve_premium_emojis=config.preserve_premium_emojis,
                         )
                     )
                 except Exception as e:

@@ -1,0 +1,41 @@
+# ==============================================
+# TeleMirror Configuration Example
+# ==============================================
+# Copy this file to .env and fill in your values
+
+# Telegram API (get from https://my.telegram.org/apps)
+API_ID=your_api_id
+API_HASH=your_api_hash
+
+# Session string (get via: python login.py)
+SESSION_STRING=your_session_string
+
+# Database settings
+USE_MEMORY_DB=false
+
+# Channel mapping (format: [source_chat_id:target_chat_id])
+# To get channel ID, add @userinfobot to your channel
+# Example: [-1001234567890:-1009876543210]
+CHAT_MAPPING=[source_chat_id:target_chat_id]
+
+# Logging
+LOG_LEVEL=INFO
+
+# Server settings
+HOST=0.0.0.0
+PORT=8000
+
+# Docker ports
+PORT_PG=5432
+PORT_API=8000
+
+# Repeat settings
+REPEAT_INTERVAL=300
+REPEAT_COUNT=3
+
+# Proxy settings (optional)
+# PROXY_TYPE=socks5
+# PROXY_HOST=127.0.0.1
+# PROXY_PORT=1080
+# PROXY_USERNAME=your_proxy_username
+# PROXY_PASSWORD=your_proxy_password 

@@ -364,6 +364,7 @@ async def forward_messages(
     reply_to_topic_id: "typing.Optional[int]" = None,
     drop_author: bool = None,
     drop_media_captions: bool = None,
+    preserve_premium_emojis: bool = True,
 ) -> "typing.Sequence[types.Message]":
     """
     Forwards the given messages to the specified entity.
@@ -416,6 +417,9 @@ async def forward_messages(
         drop_media_captions (`bool`, optional):
             Whether to strip captions from media. Setting this to `True` requires that `drop_author` also be set to `True`.
 
+        preserve_premium_emojis (`bool`, optional):
+            Whether to preserve premium emojis (MessageEntityCustomEmoji) during forwarding.
+            Defaults to `True`.
 
     Returns
         The list of forwarded `Message <telethon.tl.custom.message.Message>`,
@@ -442,6 +446,9 @@ async def forward_messages(
 
             # Forwarding as a copy
             await client.send_message(chat, message)
+            
+            # Forwarding with premium emojis preserved
+            await client.forward_messages(chat, message, preserve_premium_emojis=True)
     """
     if as_album is not None:
         warnings.warn(
@@ -474,6 +481,41 @@ async def forward_messages(
     sent = []
     for _chat_id, chunk in itertools.groupby(messages, key=get_key):
         chunk = list(chunk)
+        
+        # If preserving premium emojis is enabled, we need to handle copy mode
+        # for messages with premium emojis to preserve them
+        if preserve_premium_emojis and not drop_author:
+            # Check if any message has premium emojis
+            has_premium_emojis = False
+            for msg in chunk:
+                if isinstance(msg, types.Message) and msg.entities:
+                    for entity in msg.entities:
+                        if isinstance(entity, types.MessageEntityCustomEmoji):
+                            has_premium_emojis = True
+                            break
+                    if has_premium_emojis:
+                        break
+            
+            # If premium emojis are found, use copy mode instead of forward
+            if has_premium_emojis:
+                copied_messages = []
+                for msg in chunk:
+                    if isinstance(msg, types.Message):
+                        copied_msg = await send_message(
+                            client,
+                            entity=entity,
+                            message=msg,
+                            formatting_entities=msg.entities,
+                            reply_to_topic_id=reply_to_topic_id,
+                            silent=silent,
+                            background=background,
+                            schedule=schedule,
+                        )
+                        copied_messages.append(copied_msg)
+                sent.extend(copied_messages)
+                continue
+        
+        # Standard forward logic
         if isinstance(chunk[0], int):
             chat = from_peer
         else:
