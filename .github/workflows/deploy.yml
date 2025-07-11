@@ -1,0 +1,40 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        key: ${{ secrets.VPS_SSH_KEY }}
+        port: ${{ secrets.VPS_PORT || 22 }}
+        script: |
+          # Переходимо в директорію проекту
+          cd /home/${{ secrets.VPS_USERNAME }}/telemirror || exit 1
+          
+          # Оновлюємо код
+          git pull origin main
+          
+          # Зупиняємо старі контейнери
+          docker-compose down
+          
+          # Збираємо нові образи
+          docker-compose build --no-cache
+          
+          # Запускаємо контейнери
+          docker-compose up -d
+          
+          # Чистимо старі образи
+          docker system prune -f
+          
+          echo "✅ Деплой завершено успішно!" 

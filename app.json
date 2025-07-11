@@ -59,6 +59,26 @@
             "description": "Logging level (debug, info, warning, error or critical). Defaults to info",
             "value": "info",
             "required": false
+        },
+        "PROXY_TYPE": {
+            "description": "Proxy type (socks4, socks5, or http). Optional",
+            "required": false
+        },
+        "PROXY_HOST": {
+            "description": "Proxy server hostname or IP address. Optional",
+            "required": false
+        },
+        "PROXY_PORT": {
+            "description": "Proxy server port. Optional",
+            "required": false
+        },
+        "PROXY_USERNAME": {
+            "description": "Proxy username (if authentication required). Optional",
+            "required": false
+        },
+        "PROXY_PASSWORD": {
+            "description": "Proxy password (if authentication required). Optional",
+            "required": false
         }
     }
 }

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Optional
 
 from telethon import TelegramClient, errors, events, utils
 from telethon.sessions import StringSession
@@ -17,6 +17,7 @@ from telemirror._patch import (
 from telemirror.hints import EventAlbumMessage, EventLike, EventMessage
 from telemirror.messagefilters.base import FilterAction
 from telemirror.mixins import CopyEventMessage
+from telemirror.repeater import MessageRepeater
 from telemirror.storage import Database, MirrorMessage
 
 
@@ -42,6 +43,7 @@ class EventProcessor(CopyEventMessage):
         self._database = database
         self._client = client
         self._logger = logger
+        self._repeater = MessageRepeater(database, client, logger)
 
     @staticmethod
     def __handle_exceptions(fn):
@@ -60,7 +62,11 @@ class EventProcessor(CopyEventMessage):
     async def new_message(
         self: "EventProcessor", chat_id: int, message: EventMessage, message_link: str
     ):
-        restricted_saving_content: bool = message.chat and message.chat.noforwards
+        restricted_saving_content: bool = (
+            message.chat 
+            and hasattr(message.chat, 'noforwards') 
+            and message.chat.noforwards
+        )
 
         outgoing_chats = self._chat_mapping.get(chat_id)
         if not outgoing_chats:
@@ -178,6 +184,14 @@ class EventProcessor(CopyEventMessage):
                             mirror_channel=outgoing_chat,
                         )
                     )
+                    
+                    # Планування повторення повідомлення, якщо налаштовано
+                    if config.repeat_interval and config.repeat_interval > 0:
+                        await self._repeater.schedule_repeat(
+                            message=filtered_message,
+                            config=config,
+                            target_chat=outgoing_chat
+                        )
 
     @__handle_exceptions
     async def new_album(
@@ -185,7 +199,9 @@ class EventProcessor(CopyEventMessage):
     ) -> None:
         incoming_first_message: EventMessage = album[0]
         restricted_saving_content: bool = (
-            incoming_first_message.chat and incoming_first_message.chat.noforwards
+            incoming_first_message.chat 
+            and hasattr(incoming_first_message.chat, 'noforwards') 
+            and incoming_first_message.chat.noforwards
         )
 
         outgoing_chats = self._chat_mapping.get(chat_id)
@@ -314,6 +330,16 @@ class EventProcessor(CopyEventMessage):
                             )
                         ]
                     )
+                    
+                    # Планування повторення альбому, якщо налаштовано
+                    if config.repeat_interval and config.repeat_interval > 0:
+                        # Для альбому плануємо повторення тільки першого повідомлення
+                        first_message = filtered_album[0]
+                        await self._repeater.schedule_repeat(
+                            message=first_message,
+                            config=config,
+                            target_chat=outgoing_chat
+                        )
 
     @__handle_exceptions
     async def edit_message(
@@ -567,15 +593,17 @@ class Mirroring:
         self._receiver = receiver
         self._sender = sender
 
+        self._processor = EventProcessor(
+            chat_mapping=chat_mapping,
+            database=database,
+            client=sender,
+            logger=logger,
+        )
+        
         self._handlers = EventHandlers(
             client=receiver,
             chats=list(chat_mapping.keys()),
-            processor=EventProcessor(
-                chat_mapping=chat_mapping,
-                database=database,
-                client=sender,
-                logger=logger,
-            ),
+            processor=self._processor,
         )
 
         self._logger = logger
@@ -586,7 +614,14 @@ class Mirroring:
         if self._sender != self._receiver:
             raise RuntimeError("Different clients are not supported now")
 
-        await self.__connect_client(self._sender)
+        # Start the repeater scheduler
+        await self._processor._repeater.start_scheduler()
+        
+        try:
+            await self.__connect_client(self._sender)
+        finally:
+            # Stop the repeater scheduler on exit
+            await self._processor._repeater.stop_scheduler()
 
     def stringify_config(self: "Mirroring") -> str:
         """Stringify mirror config"""
@@ -657,6 +692,7 @@ class Telemirror:
         chat_mapping: Dict[int, Dict[int, List[DirectionConfig]]],
         database: Database,
         logger: Union[str, logging.Logger] = None,
+        proxy: Optional[str] = None,
     ):
         """Telemirror
 
@@ -667,13 +703,14 @@ class Telemirror:
             chat_mapping (`Dict[int, Dict[int, List[DirectionConfig]]]`): Chats mappings
             database (`Database`): Message IDs storage
             logger (`str` | `logging.Logger`, optional): Logger. Defaults to None.
+            proxy (`str`, optional): Proxy for TelegramClient. Defaults to None.
         """
         patch_input_media_with_spoiler()
         set_album_event_timeout(delay_sec=1.01)
 
         # Preparation for splitting receiver and sender
         recv_client = send_client = TelegramClient(
-            StringSession(session_string), api_id, api_hash
+            StringSession(session_string), api_id, api_hash, proxy=proxy
         )
         # Set up default parse mode as markdown
         recv_client.parse_mode = send_client.parse_mode = "markdown"
@@ -684,6 +721,12 @@ class Telemirror:
             logger = logging.getLogger(__name__)
 
         self._logger = logger
+        
+        # Log proxy information if configured
+        if proxy:
+            self._logger.info(f"Using proxy: {proxy.get('proxy_type', 'unknown')}://{proxy.get('addr', 'unknown')}:{proxy.get('port', 'unknown')}")
+        else:
+            self._logger.info("Direct connection (no proxy)")
 
         self._mirroring = Mirroring(
             chat_mapping=chat_mapping,

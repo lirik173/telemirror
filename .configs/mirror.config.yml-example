@@ -14,6 +14,16 @@ filters:
 disable_edit: true
 disable_delete: true
 mode: copy # or forward
+repeat_interval: 3600  # repeat every 3600 seconds (1 hour)
+repeat_count: 5        # maximum 5 repetitions
+
+# (Optional) Proxy settings - uncomment and set if needed
+# proxy:
+#   type: socks5           # socks4, socks5, or http
+#   host: 127.0.0.1
+#   port: 1080
+#   username: your_username  # optional
+#   password: your_password  # optional
 
 # (Required) Mirror directions
 directions:
@@ -29,6 +39,8 @@ directions:
     disable_edit: false
     disable_delete: false
     mode: forward
+    repeat_interval: 1800  # repeat every 30 minutes for this direction
+    repeat_count: 10       # maximum 10 repetitions for this direction
     # Overwrite global filters
     filters:
       - UrlMessageFilter:
@@ -42,3 +54,8 @@ directions:
           keywords: !!set
             ? "stopword"     # treat keyword as word
             ? "r'badword.*'" # treat keyword as regex expr
+
+  - from: [-100555]  # Приклад каналу з повтореннями без обмежень
+    to: [-100666]
+    repeat_interval: 7200  # repeat every 2 hours
+    # repeat_count не вказано - нескінченні повторення
