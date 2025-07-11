@@ -1,32 +1,40 @@
 version: '3'
+
 services:
   postgres:
     image: postgres:15
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASS}
-    env_file:
-      - .env
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
-      - database:/var/lib/postgresql/data
+      - cyp2:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
-  
+      - "${PORT_PG}:5432"
+
   telemirror:
-    build: .
+    image: sybernorth/mirror_yelp
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgres://${DB_USER}:${DB_PASS}@postgres/${DB_NAME}"
+      DATABASE_URL: "postgres://postgres:postgres@postgres/postgres"
+      API_ID: ${API_ID}
+      API_HASH: ${API_HASH}
+      SESSION_STRING: ${SESSION_STRING}
+      USE_MEMORY_DB: "true"
+      CHAT_MAPPING: ${CHAT_MAPPING}
+      LOG_LEVEL: ${LOG_LEVEL}
+      REPEAT_INTERVAL: ${REPEAT_INTERVAL}
+      REPEAT_COUNT: ${REPEAT_COUNT}
     env_file:
       - .env
     volumes:
       - ./.configs:/app/.configs:ro
     ports:
-      - "8000:8000"
+      - "${PORT_API}:8000"
     depends_on:
       - postgres
 
 volumes:
-  database:
+  cyp2:

@@ -15,7 +15,7 @@ class RestrictSavingContentBypassFilter(MessageFilter):
 
     ```
     # If here is media and noforwards enabled
-    if message.chat.noforwards and message.media:
+    if hasattr(message.chat, 'noforwards') and message.chat.noforwards and message.media:
         # Handle images
         if isinstance(message.media, types.MessageMediaPhoto):
             client: TelegramClient = message.client

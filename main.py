@@ -54,6 +54,7 @@ async def run_telemirror(
     logger: logging.Logger,
     host: str,
     port: int,
+    proxy=None,
 ):
     await serve_health_endpoint(host=host, port=port)
 
@@ -69,6 +70,7 @@ async def run_telemirror(
         chat_mapping=chat_mapping,
         database=database,
         logger=logger,
+        proxy=proxy,
     )
     await telemirror.run()
 
@@ -87,6 +89,7 @@ def main():
         PORT,
         SESSION_STRING,
         USE_MEMORY_DB,
+        build_proxy_config,
     )
 
     if sys.platform == "win32":
@@ -97,6 +100,8 @@ def main():
         import uvloop
 
         uvloop.install()
+
+    proxy_config = build_proxy_config()
 
     asyncio.run(
         run_telemirror(
@@ -109,6 +114,7 @@ def main():
             logger=configure_logging("telemirror", LOG_LEVEL),
             host=HOST,
             port=PORT,
+            proxy=proxy_config,
         )
     )
 

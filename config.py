@@ -105,6 +105,33 @@ DB_PROTOCOL: str = "postgres"
 if DB_URL is None:
     DB_URL = f"{DB_PROTOCOL}://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}"
 
+# proxy settings
+PROXY_TYPE: Optional[str] = config("PROXY_TYPE", default=None)  # socks4, socks5, http
+PROXY_HOST: Optional[str] = config("PROXY_HOST", default=None)
+PROXY_PORT: Optional[int] = config("PROXY_PORT", default=None, cast=lambda x: int(x) if x is not None else None)
+PROXY_USERNAME: Optional[str] = config("PROXY_USERNAME", default=None)
+PROXY_PASSWORD: Optional[str] = config("PROXY_PASSWORD", default=None)
+
+def build_proxy_config():
+    """Build proxy configuration for TelegramClient"""
+    if not PROXY_TYPE or not PROXY_HOST or not PROXY_PORT:
+        return None
+    
+    # Telethon supports different proxy formats
+    # Using the new dict format (recommended)
+    proxy_config = {
+        'proxy_type': PROXY_TYPE.lower(),  # 'socks4', 'socks5', 'http'
+        'addr': PROXY_HOST,
+        'port': PROXY_PORT,
+        'rdns': True  # use remote DNS resolution
+    }
+    
+    if PROXY_USERNAME and PROXY_PASSWORD:
+        proxy_config['username'] = PROXY_USERNAME
+        proxy_config['password'] = PROXY_PASSWORD
+    
+    return proxy_config
+
 LOG_LEVEL: str = config("LOG_LEVEL", default="INFO").upper()
 
 # Application local host, defaults to 0.0.0.0
@@ -129,6 +156,8 @@ class DirectionConfig:
     from_topic_id: Optional[int] = None
     to_topic_id: Optional[int] = None
     mode: Literal["copy", "forward"] = "copy"
+    repeat_interval: Optional[int] = None  # repeat interval in seconds
+    repeat_count: Optional[int] = None     # maximum number of repetitions
 
     def __repr__(self) -> str:
         return (
@@ -137,6 +166,8 @@ class DirectionConfig:
             f"editing: {not self.disable_edit}, "
             f"{f'from_topic_id: {self.from_topic_id}, ' if self.from_topic_id else ''}"
             f"{f'to_topic_id: {self.to_topic_id}, ' if self.to_topic_id else ''}"
+            f"{f'repeat_interval: {self.repeat_interval}s, ' if self.repeat_interval else ''}"
+            f"{f'repeat_count: {self.repeat_count}, ' if self.repeat_count else ''}"
             f"filters: {self.filters}"
         )
 
@@ -215,6 +246,12 @@ if YAML_CONFIG_ENV or os.path.exists(YAML_CONFIG_FILE):
                         from_topic_id=source_topic_id,
                         to_topic_id=target_topic_id,
                         mode=direction.get("mode", yaml_config.get("mode", "copy")),
+                        repeat_interval=direction.get(
+                            "repeat_interval", yaml_config.get("repeat_interval", None)
+                        ),
+                        repeat_count=direction.get(
+                            "repeat_count", yaml_config.get("repeat_count", None)
+                        ),
                     )
                 )
 
@@ -223,7 +260,12 @@ else:
     from functools import partial
 
     def build_mapping_from_env(
-        disable_edit: bool, disable_delete: bool, filters: MessageFilter, env_str: str
+        disable_edit: bool, 
+        disable_delete: bool, 
+        filters: MessageFilter, 
+        repeat_interval: Optional[int],
+        repeat_count: Optional[int],
+        env_str: str
     ) -> Dict[int, Dict[int, List[DirectionConfig]]]:
         mapping: Dict[int, Dict[int, List[DirectionConfig]]] = {}
 
@@ -240,6 +282,10 @@ else:
 
         for sources, targets in matches:
             for source in sources.split(","):
+                source = source.strip()
+                if not source:
+                    continue
+                    
                 source_topic_id = None
                 if "#" in source:
                     source, source_topic_id = map(int, source.split("#"))
@@ -247,6 +293,10 @@ else:
                     source = int(source)
 
                 for target in targets.split(","):
+                    target = target.strip()
+                    if not target:
+                        continue
+                        
                     target_topic_id = None
                     if "#" in target:
                         target, target_topic_id = map(int, target.split("#"))
@@ -260,6 +310,8 @@ else:
                             filters=filters,
                             from_topic_id=source_topic_id,
                             to_topic_id=target_topic_id,
+                            repeat_interval=repeat_interval,
+                            repeat_count=repeat_count,
                         )
                     )
 
@@ -278,6 +330,10 @@ else:
 
     DISABLE_EDIT: bool = config("DISABLE_EDIT", cast=bool, default=False)
     DISABLE_DELETE: bool = config("DISABLE_DELETE", cast=bool, default=False)
+    
+    # repeat settings
+    REPEAT_INTERVAL: Optional[int] = config("REPEAT_INTERVAL", cast=int, default=None)
+    REPEAT_COUNT: Optional[int] = config("REPEAT_COUNT", cast=int, default=None)
 
     if REMOVE_URLS:
         message_filter = UrlMessageFilter(
@@ -291,6 +347,8 @@ else:
         DISABLE_EDIT,
         DISABLE_DELETE,
         message_filter,
+        REPEAT_INTERVAL,
+        REPEAT_COUNT,
     )
 
     CHAT_MAPPING = config("CHAT_MAPPING", cast=cast_env_chat_mapping, default="")
