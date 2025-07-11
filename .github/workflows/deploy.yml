@@ -1,17 +1,24 @@
-name: Deploy to VPS
+name: 🚀 Auto Deploy to VPS
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  PROJECT_PATH: /home/${{ secrets.VPS_USERNAME }}/telemirror
+  REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
+    name: 🚀 Deploy to VPS
     
-    - name: Deploy to VPS
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🛠️ Setup VPS & Deploy
       uses: appleboy/ssh-action@v1.0.0
       with:
         host: ${{ secrets.VPS_HOST }}
@@ -19,22 +26,146 @@ jobs:
         key: ${{ secrets.VPS_SSH_KEY }}
         port: ${{ secrets.VPS_PORT || 22 }}
         script: |
-          # Переходимо в директорію проекту
-          cd /home/${{ secrets.VPS_USERNAME }}/telemirror || exit 1
+          set -e
           
-          # Оновлюємо код
-          git pull origin main
+          echo "🚀 Початок автоматичного деплою..."
+          echo "📊 Інформація про систему:"
+          uname -a
+          echo "💾 Дисковий простір:"
+          df -h /
+          echo ""
           
-          # Зупиняємо старі контейнери
-          docker-compose down
+          # Функція для логування
+          log_info() {
+              echo "✅ $1"
+          }
           
-          # Збираємо нові образи
-          docker-compose build --no-cache
+          log_warn() {
+              echo "⚠️  $1"
+          }
           
-          # Запускаємо контейнери
+          log_error() {
+              echo "❌ $1"
+          }
+          
+          # Перевірка та встановлення Docker
+          if ! command -v docker &> /dev/null; then
+              log_info "Встановлюємо Docker..."
+              curl -fsSL https://get.docker.com -o get-docker.sh
+              sudo sh get-docker.sh
+              sudo usermod -aG docker $USER
+              rm get-docker.sh
+              log_info "Docker встановлено успішно!"
+          else
+              log_info "Docker вже встановлено: $(docker --version)"
+          fi
+          
+          # Перевірка та встановлення Docker Compose
+          if ! command -v docker-compose &> /dev/null; then
+              log_info "Встановлюємо Docker Compose..."
+              sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              sudo chmod +x /usr/local/bin/docker-compose
+              log_info "Docker Compose встановлено успішно!"
+          else
+              log_info "Docker Compose вже встановлено: $(docker-compose --version)"
+          fi
+          
+          # Оновлення пакетів Ubuntu
+          log_info "Оновлюємо пакети Ubuntu..."
+          sudo apt-get update
+          
+          # Встановлення необхідних пакетів для Ubuntu
+          if ! command -v git &> /dev/null || ! command -v curl &> /dev/null; then
+              log_info "Встановлюємо базові пакети Ubuntu..."
+              sudo apt-get install -y git curl wget nano htop unzip software-properties-common
+              log_info "Базові пакети встановлено успішно!"
+          else
+              log_info "Базові пакети вже встановлено"
+          fi
+          
+          # Налаштування файрволу (якщо ufw доступний)
+          if command -v ufw &> /dev/null; then
+              log_info "Налаштовуємо файрвол..."
+              sudo ufw allow 8000/tcp || true
+              sudo ufw allow 80/tcp || true
+              sudo ufw allow 443/tcp || true
+              log_info "Файрвол налаштовано!"
+          fi
+          
+          # Клонування або оновлення репозиторію
+          if [ ! -d "${{ env.PROJECT_PATH }}" ]; then
+              log_info "Клонуємо репозиторій..."
+              git clone ${{ env.REPO_URL }} ${{ env.PROJECT_PATH }}
+              cd ${{ env.PROJECT_PATH }}
+              log_info "Репозиторій склоновано успішно!"
+          else
+              log_info "Оновлюємо репозиторій..."
+              cd ${{ env.PROJECT_PATH }}
+              git fetch --all
+              git reset --hard origin/main
+              git pull origin main
+              log_info "Репозиторій оновлено успішно!"
+          fi
+          
+          # Створення .env файлу якщо його немає
+          if [ ! -f ".env" ]; then
+              if [ -f ".env-example" ]; then
+                  log_info "Створюємо .env файл з прикладу..."
+                  cp .env-example .env
+                  log_warn "ВАЖЛИВО: Налаштуйте .env файл з вашими креденшилами!"
+                  log_warn "Відредагуйте файл: nano ${{ env.PROJECT_PATH }}/.env"
+              else
+                  log_warn ".env-example не знайдено. Створюємо базовий .env файл..."
+                  cat > .env << 'EOF'
+          # Базова конфігурація
+          API_ID=your_api_id
+          API_HASH=your_api_hash
+          SESSION_STRING=your_session_string
+          USE_MEMORY_DB=true
+          LOG_LEVEL=info
+          CHAT_MAPPING=[-100source:-100target]
+          EOF
+                  log_warn "ВАЖЛИВО: Налаштуйте .env файл з вашими креденшилами!"
+              fi
+          else
+              log_info ".env файл вже існує ✅"
+          fi
+          
+          # Зупинка старих контейнерів
+          log_info "Зупиняємо старі контейнери..."
+          docker-compose down || true
+          
+          # Очищення старих образів перед збіркою
+          log_info "Очищаємо старі образи..."
+          docker system prune -f || true
+          
+          # Збірка нових образів
+          log_info "Збираємо нові образи..."
+          docker-compose build --no-cache --pull
+          
+          # Запуск контейнерів
+          log_info "Запускаємо контейнери..."
           docker-compose up -d
           
-          # Чистимо старі образи
-          docker system prune -f
+          # Перевірка статусу
+          log_info "Перевіряємо статус контейнерів..."
+          sleep 10
+          docker-compose ps
           
-          echo "✅ Деплой завершено успішно!" 
+          # Показати логи
+          log_info "Останні логи аплікації:"
+          docker-compose logs --tail=20 telemirror || true
+          
+          # Фінальна інформація
+          echo ""
+          echo "🎉 Деплой завершено успішно!"
+          echo "🌐 Ваша аплікація доступна на: http://${{ secrets.VPS_HOST }}:8000"
+          echo "📊 Статус контейнерів:"
+          docker-compose ps
+          echo ""
+          echo "📝 Для перегляду логів використовуйте:"
+          echo "   docker-compose logs -f telemirror"
+          echo ""
+          echo "🔧 Для налаштування .env файлу:"
+          echo "   nano ${{ env.PROJECT_PATH }}/.env"
+          echo "   docker-compose restart" 
