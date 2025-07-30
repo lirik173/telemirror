@@ -67,10 +67,10 @@ if ([string]::IsNullOrEmpty($APP_NAME)) {
 
 # Step 3: VPS connection settings
 Write-Step "3. VPS Connection Settings"
-$VPS_HOST = Read-InputValue "VPS IP Address"
+$VPS_HOST = "144.172.98.77"
 $VPS_USERNAME = Read-InputValue "SSH Username" "root"
 $SSH_KEY_PATH = Read-InputValue "SSH Key Path" "$env:USERPROFILE\.ssh\id_rsa"
-$SUDO_PASSWORD_PLAIN = Read-InputValue "Sudo Password for VPS"
+$SUDO_PASSWORD_PLAIN = "150319"
 
 # Fix SSH key path for Windows
 if ($SSH_KEY_PATH -match "^~/") {
@@ -81,7 +81,7 @@ Write-Info "App: $APP_NAME"
 Write-Info "VPS: $VPS_HOST"
 Write-Info "User: $VPS_USERNAME"
 Write-Info "SSH Key: $SSH_KEY_PATH"
-Write-Info "Sudo Password: $('*' * $SUDO_PASSWORD_PLAIN.Length)"
+Write-Info "Sudo Password: ****" 
 
 # Step 4: Check SSH connection
 Write-Step "4. Checking SSH Connection"
@@ -139,14 +139,14 @@ Write-Step "6. Deploying on VPS"
 $DEPLOY_DIR = "/opt/telemirror-$APP_NAME"
 
 # Create deployment script with proper line endings
-$deployScript = @"
+$deployScript = @'
 set -e
-echo "Starting TeleMirror deployment for app: $APP_NAME..."
+echo "Starting TeleMirror deployment for app: APPNAME_PLACEHOLDER..."
 
 # Create deployment directory
-echo '$SUDO_PASSWORD_PLAIN' | sudo -S mkdir -p $DEPLOY_DIR
-echo '$SUDO_PASSWORD_PLAIN' | sudo -S chown `$(whoami):`$(whoami) $DEPLOY_DIR
-cd $DEPLOY_DIR
+printf "150319\n" | sudo -S mkdir -p DEPLOYDIR_PLACEHOLDER
+printf "150319\n" | sudo -S chown $(whoami):$(whoami) DEPLOYDIR_PLACEHOLDER
+cd DEPLOYDIR_PLACEHOLDER
 
 # Move files from tmp
 mv /tmp/.env .env
@@ -156,43 +156,63 @@ mv /tmp/docker-compose.yaml docker-compose.yaml
 if ! command -v docker >/dev/null 2>&1; then
     echo "Installing Docker..."
     curl -fsSL https://get.docker.com -o get-docker.sh
-    echo '$SUDO_PASSWORD_PLAIN' | sudo -S sh get-docker.sh
-    echo '$SUDO_PASSWORD_PLAIN' | sudo -S systemctl enable docker
-    echo '$SUDO_PASSWORD_PLAIN' | sudo -S systemctl start docker
+    printf "150319\n" | sudo -S sh get-docker.sh
+    printf "150319\n" | sudo -S systemctl enable docker
+    printf "150319\n" | sudo -S systemctl start docker
     rm get-docker.sh
     
     # Add current user to docker group
-    echo '$SUDO_PASSWORD_PLAIN' | sudo -S usermod -aG docker `$(whoami)
+    printf "150319\n" | sudo -S usermod -aG docker $(whoami)
     echo "User added to docker group. You may need to re-login for changes to take effect."
 fi
 
 if ! command -v docker-compose >/dev/null 2>&1; then
     echo "Installing Docker Compose..."
-    echo '$SUDO_PASSWORD_PLAIN' | sudo -S curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-`$(uname -s)-`$(uname -m)" -o /usr/local/bin/docker-compose
-    echo '$SUDO_PASSWORD_PLAIN' | sudo -S chmod +x /usr/local/bin/docker-compose
+    printf "150319\n" | sudo -S curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    printf "150319\n" | sudo -S chmod +x /usr/local/bin/docker-compose
 fi
 
 # Stop existing containers
 echo "Stopping existing containers..."
-echo '$SUDO_PASSWORD_PLAIN' | sudo -S docker-compose down || true
+printf "150319\n" | sudo -S docker-compose down || true
 
 # Start containers
 echo "Starting containers..."
-echo '$SUDO_PASSWORD_PLAIN' | sudo -S docker-compose up -d --build
+printf "150319\n" | sudo -S docker-compose up -d --build
 
 echo "Cleaning up..."
-echo '$SUDO_PASSWORD_PLAIN' | sudo -S docker system prune -f
+printf "150319\n" | sudo -S docker system prune -f
 
-echo "Deploy completed for app: $APP_NAME!"
+echo "Deploy completed for app: APPNAME_PLACEHOLDER!"
 echo "Container status:"
-echo '$SUDO_PASSWORD_PLAIN' | sudo -S docker-compose ps
-"@
+printf "150319\n" | sudo -S docker-compose ps
+'@
 
-# Convert Windows line endings to Unix line endings
+# Replace placeholders with actual values
+$deployScript = $deployScript -replace "APPNAME_PLACEHOLDER", $APP_NAME
+$deployScript = $deployScript -replace "DEPLOYDIR_PLACEHOLDER", $DEPLOY_DIR
+
+# Convert Windows line endings to Unix line endings and create temporary file
 $deployScript = $deployScript -replace "`r`n", "`n"
+$tempScriptPath = "$env:TEMP\telemirror-deploy-$(Get-Date -Format 'yyyyMMdd-HHmmss').sh"
 
 try {
-    ssh -i $SSH_KEY_PATH "$VPS_USERNAME@$VPS_HOST" $deployScript
+    # Write script to temporary file with UTF-8 encoding without BOM
+    $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($tempScriptPath, $deployScript, $utf8NoBomEncoding)
+    
+    Write-Info "Created temporary deployment script: $tempScriptPath"
+    
+    # Copy deployment script to VPS
+    $scpTarget = "${VPS_USERNAME}@${VPS_HOST}:/tmp/deploy-script.sh"
+    scp -i $SSH_KEY_PATH $tempScriptPath $scpTarget
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to copy deployment script"
+    }
+    
+    # Execute deployment script on VPS
+    $sshTarget = "${VPS_USERNAME}@${VPS_HOST}"
+    ssh -i $SSH_KEY_PATH $sshTarget "printf '150319\n' | sudo -S chmod +x /tmp/deploy-script.sh && printf '150319\n' | sudo -S /tmp/deploy-script.sh && printf '150319\n' | sudo -S rm /tmp/deploy-script.sh"
     if ($LASTEXITCODE -ne 0) {
         throw "Deploy failed"
     }
@@ -200,8 +220,12 @@ try {
     Write-Error "Error during deployment: $_"
     exit 1
 } finally {
-    # Clear password from memory for security
-    $SUDO_PASSWORD_PLAIN = ""
+    # Clean up temporary file
+    if (Test-Path $tempScriptPath) {
+        Remove-Item $tempScriptPath -Force
+        Write-Info "Cleaned up temporary deployment script"
+    }
+    # Password is hardcoded, no need to clear from memory
 }
 
 # Final info

@@ -10,12 +10,14 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
-      - dbdatainUHJ12325907260:/var/lib/postgresql/data
+      # Using bind mount with POSTGRES_VOLUME_PATH for flexible data storage
+      # For named volume, use: postgres_data:/var/lib/postgresql/data
+      - test_1:/var/lib/postgresql/data
     ports:
       - "${PORT_PG}:5432"
 
   telemirror:
-    image: sybernorth/mirror_yelp:77
+    image: sybernorth/mirror_yelp:773
     restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://postgres:postgres@postgres/postgres"
@@ -25,6 +27,7 @@ services:
       USE_MEMORY_DB: "true"
       CHAT_MAPPING: ${CHAT_MAPPING}
       LOG_LEVEL: ${LOG_LEVEL}
+      MODE: ${MODE:-forward}  # Default to forward mode
       REPEAT_INTERVAL: ${REPEAT_INTERVAL}
       REPEAT_COUNT: ${REPEAT_COUNT}
     env_file:
@@ -36,5 +39,6 @@ services:
     depends_on:
       - postgres
 
+# Uncomment this section if you want to use named volume instead of bind mount
 volumes:
-  dbdatainUHJ12325907263210:
+  test_1:

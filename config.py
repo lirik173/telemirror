@@ -139,6 +139,9 @@ HOST: str = config("HOST", default="0.0.0.0")
 # Application local port, defaults to 8000
 PORT: int = config("PORT", default=8000, cast=int)
 
+# PostgreSQL volume path for Docker
+POSTGRES_VOLUME_PATH: str = config("POSTGRES_VOLUME_PATH", default="./postgres_data")
+
 ###############Channel mirroring config#################
 
 YAML_CONFIG_ENV: Optional[str] = config("YAML_CONFIG_ENV", default=None)
@@ -155,7 +158,7 @@ class DirectionConfig:
     filters: MessageFilter
     from_topic_id: Optional[int] = None
     to_topic_id: Optional[int] = None
-    mode: Literal["copy", "forward"] = "copy"
+    mode: Literal["copy", "forward"] = "forward"  # Changed default from "copy" to "forward"
     repeat_interval: Optional[int] = None  # repeat interval in seconds
     repeat_count: Optional[int] = None     # maximum number of repetitions
     drop_author: bool = False              # hide forward author (може допомогти з премій емоджі)
@@ -249,7 +252,7 @@ if YAML_CONFIG_ENV or os.path.exists(YAML_CONFIG_FILE):
                         ),
                         from_topic_id=source_topic_id,
                         to_topic_id=target_topic_id,
-                        mode=direction.get("mode", yaml_config.get("mode", "copy")),
+                        mode=direction.get("mode", yaml_config.get("mode", "forward")),
                         repeat_interval=direction.get(
                             "repeat_interval", yaml_config.get("repeat_interval", None)
                         ),
@@ -275,6 +278,7 @@ else:
         filters: MessageFilter, 
         repeat_interval: Optional[int],
         repeat_count: Optional[int],
+        mode: Literal["copy", "forward"],
         env_str: str
     ) -> Dict[int, Dict[int, List[DirectionConfig]]]:
         mapping: Dict[int, Dict[int, List[DirectionConfig]]] = {}
@@ -320,6 +324,7 @@ else:
                             filters=filters,
                             from_topic_id=source_topic_id,
                             to_topic_id=target_topic_id,
+                            mode=mode,
                             repeat_interval=repeat_interval,
                             repeat_count=repeat_count,
                             drop_author=False,  # За замовчуванням False для env конфігурації
@@ -346,6 +351,9 @@ else:
     # repeat settings
     REPEAT_INTERVAL: Optional[int] = config("REPEAT_INTERVAL", cast=int, default=None)
     REPEAT_COUNT: Optional[int] = config("REPEAT_COUNT", cast=int, default=None)
+    
+    # mode setting - forward or copy
+    MODE: Literal["copy", "forward"] = config("MODE", default="forward")
 
     if REMOVE_URLS:
         message_filter = UrlMessageFilter(
@@ -361,6 +369,7 @@ else:
         message_filter,
         REPEAT_INTERVAL,
         REPEAT_COUNT,
+        MODE,
     )
 
     CHAT_MAPPING = config("CHAT_MAPPING", cast=cast_env_chat_mapping, default="")

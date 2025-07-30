@@ -29,6 +29,9 @@ PORT=8000
 PORT_PG=5432
 PORT_API=8000
 
+# PostgreSQL volume path (for Docker)
+POSTGRES_VOLUME_PATH=./postgres_data
+
 # Repeat settings
 REPEAT_INTERVAL=300
 REPEAT_COUNT=3
