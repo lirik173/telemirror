@@ -81,30 +81,6 @@ API_HASH: str = config("API_HASH")
 # auth session string: can be obtain by run login.py
 SESSION_STRING: str = config("SESSION_STRING")
 
-USE_MEMORY_DB: bool = config("USE_MEMORY_DB", default=False, cast=bool)
-
-# postgres credentials
-# connection string
-DB_URL: str = config("DATABASE_URL", default=None)
-# or postgres credentials
-DB_NAME: str = config("DB_NAME", default=None)
-DB_USER: str = config("DB_USER", default=None)
-DB_PASS: str = config("DB_PASS", default=None)
-DB_HOST: str = config("DB_HOST", default=None)
-
-if not USE_MEMORY_DB and DB_URL is None and DB_HOST is None:
-    raise Exception(
-        "The database configuration is incorrect. "
-        "Please provide valid DATABASE_URL (or DB_HOST, DB_NAME, DB_USER, DB_PASS) "
-        "or set USE_MEMORY_DB to True to use in-memory database."
-    )
-
-DB_PROTOCOL: str = "postgres"
-
-# if connection string wasnt set then build it from credentials
-if DB_URL is None:
-    DB_URL = f"{DB_PROTOCOL}://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}"
-
 # proxy settings
 PROXY_TYPE: Optional[str] = config("PROXY_TYPE", default=None)  # socks4, socks5, http
 PROXY_HOST: Optional[str] = config("PROXY_HOST", default=None)
@@ -139,9 +115,6 @@ HOST: str = config("HOST", default="0.0.0.0")
 # Application local port, defaults to 8000
 PORT: int = config("PORT", default=8000, cast=int)
 
-# PostgreSQL volume path for Docker
-POSTGRES_VOLUME_PATH: str = config("POSTGRES_VOLUME_PATH", default="./postgres_data")
-
 ###############Channel mirroring config#################
 
 YAML_CONFIG_ENV: Optional[str] = config("YAML_CONFIG_ENV", default=None)
@@ -153,26 +126,20 @@ CHAT_MAPPING: Dict[int, Dict[int, List["DirectionConfig"]]] = {}
 
 @dataclass(frozen=True)
 class DirectionConfig:
-    disable_delete: bool
-    disable_edit: bool
     filters: MessageFilter
     from_topic_id: Optional[int] = None
     to_topic_id: Optional[int] = None
     mode: Literal["copy", "forward"] = "forward"  # Changed default from "copy" to "forward"
     repeat_interval: Optional[int] = None  # repeat interval in seconds
-    repeat_count: Optional[int] = None     # maximum number of repetitions
-    drop_author: bool = False              # hide forward author (може допомогти з премій емоджі)
+    drop_author: bool = False              # hide forward author (can help with premium emojis)
     preserve_premium_emojis: bool = True   # preserve premium emojis during forwarding
 
     def __repr__(self) -> str:
         return (
             f"mode: {self.mode}, "
-            f"deleting: {not self.disable_delete}, "
-            f"editing: {not self.disable_edit}, "
             f"{f'from_topic_id: {self.from_topic_id}, ' if self.from_topic_id else ''}"
             f"{f'to_topic_id: {self.to_topic_id}, ' if self.to_topic_id else ''}"
             f"{f'repeat_interval: {self.repeat_interval}s, ' if self.repeat_interval else ''}"
-            f"{f'repeat_count: {self.repeat_count}, ' if self.repeat_count else ''}"
             f"drop_author: {self.drop_author}, "
             f"preserve_premium_emojis: {self.preserve_premium_emojis}, "
             f"filters: {self.filters}"
@@ -241,12 +208,6 @@ if YAML_CONFIG_ENV or os.path.exists(YAML_CONFIG_FILE):
 
                 CHAT_MAPPING.setdefault(source, {}).setdefault(target, []).append(
                     DirectionConfig(
-                        disable_delete=direction.get(
-                            "disable_delete", yaml_config.get("disable_delete", False)
-                        ),
-                        disable_edit=direction.get(
-                            "disable_edit", yaml_config.get("disable_edit", False)
-                        ),
                         filters=build_filters(
                             direction.get("filters", None), default_filters
                         ),
@@ -255,9 +216,6 @@ if YAML_CONFIG_ENV or os.path.exists(YAML_CONFIG_FILE):
                         mode=direction.get("mode", yaml_config.get("mode", "forward")),
                         repeat_interval=direction.get(
                             "repeat_interval", yaml_config.get("repeat_interval", None)
-                        ),
-                        repeat_count=direction.get(
-                            "repeat_count", yaml_config.get("repeat_count", None)
                         ),
                         drop_author=direction.get(
                             "drop_author", yaml_config.get("drop_author", False)
@@ -273,11 +231,8 @@ else:
     from functools import partial
 
     def build_mapping_from_env(
-        disable_edit: bool, 
-        disable_delete: bool, 
         filters: MessageFilter, 
         repeat_interval: Optional[int],
-        repeat_count: Optional[int],
         mode: Literal["copy", "forward"],
         env_str: str
     ) -> Dict[int, Dict[int, List[DirectionConfig]]]:
@@ -319,16 +274,13 @@ else:
 
                     mapping.setdefault(source, {}).setdefault(target, []).append(
                         DirectionConfig(
-                            disable_delete=disable_delete,
-                            disable_edit=disable_edit,
                             filters=filters,
                             from_topic_id=source_topic_id,
                             to_topic_id=target_topic_id,
                             mode=mode,
                             repeat_interval=repeat_interval,
-                            repeat_count=repeat_count,
-                            drop_author=False,  # За замовчуванням False для env конфігурації
-                            preserve_premium_emojis=True, # За замовчуванням True для env конфігурації
+                            drop_author=False,  # Default False for env configuration
+                            preserve_premium_emojis=True, # Default True for env configuration
                         )
                     )
 
@@ -344,13 +296,9 @@ else:
     REMOVE_URLS_LIST: set = config(
         "REMOVE_URLS_LIST", cast=Csv(post_process=set), default=""
     )
-
-    DISABLE_EDIT: bool = config("DISABLE_EDIT", cast=bool, default=False)
-    DISABLE_DELETE: bool = config("DISABLE_DELETE", cast=bool, default=False)
     
     # repeat settings
     REPEAT_INTERVAL: Optional[int] = config("REPEAT_INTERVAL", cast=int, default=None)
-    REPEAT_COUNT: Optional[int] = config("REPEAT_COUNT", cast=int, default=None)
     
     # mode setting - forward or copy
     MODE: Literal["copy", "forward"] = config("MODE", default="forward")
@@ -364,11 +312,8 @@ else:
 
     cast_env_chat_mapping = partial(
         build_mapping_from_env,
-        DISABLE_EDIT,
-        DISABLE_DELETE,
         message_filter,
         REPEAT_INTERVAL,
-        REPEAT_COUNT,
         MODE,
     )
 

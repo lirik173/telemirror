@@ -1,7 +1,6 @@
 import logging
 
 from telemirror.mirroring import Telemirror
-from telemirror.storage import InMemoryDatabase, PostgresDatabase
 
 
 async def serve_health_endpoint(host: str, port: int) -> None:
@@ -45,8 +44,6 @@ def configure_logging(logger_name: str, log_level: str) -> logging.Logger:
 
 
 async def run_telemirror(
-    use_memory_db: bool,
-    db_uri: str,
     api_id: str,
     api_hash: str,
     session_string: str,
@@ -58,17 +55,11 @@ async def run_telemirror(
 ):
     await serve_health_endpoint(host=host, port=port)
 
-    if use_memory_db:
-        database = InMemoryDatabase()
-    else:
-        database = await PostgresDatabase(connection_string=db_uri)
-
     telemirror = Telemirror(
         api_id=api_id,
         api_hash=api_hash,
         session_string=session_string,
         chat_mapping=chat_mapping,
-        database=database,
         logger=logger,
         proxy=proxy,
     )
@@ -83,30 +74,24 @@ def main():
         API_HASH,
         API_ID,
         CHAT_MAPPING,
-        DB_URL,
         HOST,
         LOG_LEVEL,
         PORT,
         SESSION_STRING,
-        USE_MEMORY_DB,
         build_proxy_config,
     )
 
     if sys.platform == "win32":
-        if USE_MEMORY_DB is False:
-            # required by psycopg async pool on windows platform
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        # Set event loop policy for Windows
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     else:
         import uvloop
-
         uvloop.install()
 
     proxy_config = build_proxy_config()
 
     asyncio.run(
         run_telemirror(
-            use_memory_db=USE_MEMORY_DB,
-            db_uri=DB_URL,
             api_id=API_ID,
             api_hash=API_HASH,
             session_string=SESSION_STRING,

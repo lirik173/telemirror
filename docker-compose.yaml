@@ -1,44 +1,20 @@
 version: '3'
 
 services:
-  postgres:
-    image: postgres:15
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_HOST_AUTH_METHOD: trust
-    volumes:
-      # Using bind mount with POSTGRES_VOLUME_PATH for flexible data storage
-      # For named volume, use: postgres_data:/var/lib/postgresql/data
-      - test_1:/var/lib/postgresql/data
-    ports:
-      - "${PORT_PG}:5432"
-
   telemirror:
-    image: sybernorth/mirror_yelp:773
+    image: sybernorth/mirror_yelp:774
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgres://postgres:postgres@postgres/postgres"
       API_ID: ${API_ID}
       API_HASH: ${API_HASH}
       SESSION_STRING: ${SESSION_STRING}
-      USE_MEMORY_DB: "true"
       CHAT_MAPPING: ${CHAT_MAPPING}
       LOG_LEVEL: ${LOG_LEVEL}
       MODE: ${MODE:-forward}  # Default to forward mode
       REPEAT_INTERVAL: ${REPEAT_INTERVAL}
-      REPEAT_COUNT: ${REPEAT_COUNT}
     env_file:
       - .env
     volumes:
       - ./.configs:/app/.configs:ro
     ports:
       - "${PORT_API}:8000"
-    depends_on:
-      - postgres
-
-# Uncomment this section if you want to use named volume instead of bind mount
-volumes:
-  test_1:

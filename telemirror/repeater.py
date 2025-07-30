@@ -1,65 +1,85 @@
 import asyncio
-import json
 import logging
 import random
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
+from dataclasses import dataclass
 
 from telethon import TelegramClient
 
 from config import DirectionConfig
 from telemirror.hints import EventMessage
-from telemirror.storage import Database, RepeatedMessage
 from telemirror._patch.sending import send_message, send_file
+
+
+@dataclass
+class RepeatTask:
+    """
+    Simple repeat task stored in memory
+    """
+    original_id: int
+    original_channel: int
+    target_chat: int
+    message_text: str
+    message_raw_text: str
+    has_media: bool
+    media_type: Optional[str]
+    repeat_interval: int
+    base_repeat_interval: int
+    to_topic_id: Optional[int]
+    mode: str
+    next_repeat_time: datetime
+    repeat_count: int = 0
 
 
 class MessageRepeater:
     """
-    Клас для управління повтореннями повідомлень
+    Simple message repeater with infinite retries and no database dependency
     
-    Керує плануванням, виконанням та відстеженням повторюваних повідомлень
+    Manages scheduling, execution and tracking of repeated messages in memory
     """
     
     def __init__(
         self,
-        database: Database,
         client: TelegramClient,
         logger: logging.Logger,
         check_interval: int = 30,  # check every 30 seconds
-        randomize_percent: int = 20  # рандомізація інтервалу ±20%
+        randomize_percent: int = 20  # randomize interval ±20%
     ):
         """
-        Ініціалізація MessageRepeater
+        Initialize MessageRepeater
         
         Args:
-            database: База даних для зберігання повторюваних повідомлень
-            client: Telegram клієнт для відправки повідомлень
-            logger: Логгер
+            client: Telegram client for sending messages
+            logger: Logger
             check_interval: Check interval in seconds
-            randomize_percent: Відсоток рандомізації інтервалу (1-50)
+            randomize_percent: Percentage of interval randomization (1-50)
         """
-        self.database = database
         self.client = client
         self.logger = logger
         self.check_interval = check_interval
-        self.randomize_percent = max(1, min(50, randomize_percent))  # обмежуємо 1-50%
+        self.randomize_percent = max(1, min(50, randomize_percent))  # limit 1-50%
         self.running = False
         self._scheduler_task: Optional[asyncio.Task] = None
+        
+        # In-memory storage for repeat tasks
+        self._repeat_tasks: Dict[str, RepeatTask] = {}
+        self._channel_tasks: Dict[int, Set[str]] = {}  # track tasks per channel
     
     def _randomize_interval(self, base_interval: int) -> int:
         """
-        Додає рандомність до базового інтервалу
+        Add randomness to base interval
         
         Args:
             base_interval: Base interval in seconds
             
         Returns:
-            Рандомізований інтервал
+            Randomized interval
         """
         if base_interval <= 0:
             return base_interval
             
-        # Обчислюємо рандомний відхил (±randomize_percent%)
+        # Calculate random deviation (±randomize_percent%)
         variation = int(base_interval * self.randomize_percent / 100)
         random_offset = random.randint(-variation, variation)
         
@@ -68,6 +88,10 @@ class MessageRepeater:
         
         return randomized_interval
     
+    def _get_task_key(self, original_channel: int, target_chat: int) -> str:
+        """Generate unique task key for channel->target mapping"""
+        return f"{original_channel}:{target_chat}"
+    
     async def schedule_repeat(
         self,
         message: EventMessage,
@@ -75,260 +99,207 @@ class MessageRepeater:
         target_chat: int
     ) -> None:
         """
-        Планування повторення повідомлення
+        Schedule message repetition (infinite retries)
         
         Args:
-            message: Повідомлення для повторення
-            config: Конфігурація направлення
-            target_chat: ID цільового чату
+            message: Message to repeat
+            config: Direction configuration
+            target_chat: Target chat ID
         """
         if not config.repeat_interval or config.repeat_interval <= 0:
             return
         
-        # Stop previous repeats for this channel before creating new one
-        await self._stop_previous_repeats(message.chat_id, target_chat)
+        # Stop previous repeats for this channel->target before creating new one
+        self._stop_previous_repeats(message.chat_id, target_chat)
         
-        # Рандомізуємо інтервал для початкового повторення
+        # Randomize interval for initial repeat
         randomized_interval = self._randomize_interval(config.repeat_interval)
         
-        # Серіалізуємо дані повідомлення
-        message_data = {
-            "text": message.text or "",
-            "raw_text": message.raw_text or "",
-            "has_media": message.media is not None,
-            "media_type": message.media.__class__.__name__ if message.media else None,
-            "original_message_id": message.id,
-            "original_chat_id": message.chat_id,
-        }
-        
-        # Серіалізуємо конфігурацію
-        target_config = {
-            "target_chat": target_chat,
-            "mode": config.mode,
-            "to_topic_id": config.to_topic_id,
-            "repeat_interval": randomized_interval,  # використовуємо рандомізований інтервал
-            "base_repeat_interval": config.repeat_interval,  # зберігаємо базовий для наступних ітерацій
-        }
-        
-        # Обчислюємо час наступного повторення з рандомізованим інтервалом
+        # Calculate next repeat time with randomized interval
         next_repeat_time = datetime.now() + timedelta(seconds=randomized_interval)
         
-        # Створюємо запис для повторення
-        repeated_message = RepeatedMessage(
-            id=None,
+        # Create repeat task
+        task_key = self._get_task_key(message.chat_id, target_chat)
+        repeat_task = RepeatTask(
             original_id=message.id,
             original_channel=message.chat_id,
-            message_data=message_data,
-            target_configs=target_config,
+            target_chat=target_chat,
+            message_text=message.text or "",
+            message_raw_text=message.raw_text or "",
+            has_media=message.media is not None,
+            media_type=message.media.__class__.__name__ if message.media else None,
+            repeat_interval=randomized_interval,
+            base_repeat_interval=config.repeat_interval,
+            to_topic_id=config.to_topic_id,
+            mode=config.mode,
             next_repeat_time=next_repeat_time,
-            repeat_count=0,
-            max_repeats=config.repeat_count,
-            created_at=None
+            repeat_count=0
         )
         
-        # Зберігаємо в базі даних
-        repeated_id = await self.database.insert_repeated_message(repeated_message)
+        # Store in memory
+        self._repeat_tasks[task_key] = repeat_task
+        self._channel_tasks.setdefault(message.chat_id, set()).add(task_key)
         
         self.logger.info(
-            f"Scheduled repeat for message {message.id} from chat {message.chat_id} "
+            f"Scheduled infinite repeat for message {message.id} from chat {message.chat_id} "
             f"to chat {target_chat}, next repeat at {next_repeat_time} "
-            f"(interval: {randomized_interval}s, base: {config.repeat_interval}s), "
-            f"repeat_id: {repeated_id}"
+            f"(interval: {randomized_interval}s, base: {config.repeat_interval}s)"
         )
     
-    async def _stop_previous_repeats(self, original_channel: int, target_chat: int) -> None:
+    def _stop_previous_repeats(self, original_channel: int, target_chat: int) -> None:
         """
-        Зупиняє попередні повторення для даного каналу та цільового чату
+        Stop previous repeats for given channel and target chat
         
         Args:
-            original_channel: ID оригінального каналу
-            target_chat: ID цільового чату
+            original_channel: Original channel ID
+            target_chat: Target chat ID
         """
-        try:
-            # Отримуємо всі активні повторення для цього каналу
-            active_repeats = await self.database.get_active_repeated_messages_for_channel(
-                original_channel, target_chat
-            )
+        task_key = self._get_task_key(original_channel, target_chat)
+        
+        if task_key in self._repeat_tasks:
+            del self._repeat_tasks[task_key]
             
-            if active_repeats:
-                self.logger.info(
-                    f"Stopping {len(active_repeats)} previous repeats for "
-                    f"channel {original_channel} -> {target_chat}"
-                )
-                
-                # Видаляємо старі повторення
-                for repeat in active_repeats:
-                    await self.database.delete_repeated_message(repeat.id)
-                    self.logger.debug(
-                        f"Stopped repeat {repeat.id} for message {repeat.original_id}"
-                    )
-                    
-        except AttributeError:
-            # Якщо метод get_active_repeated_messages_for_channel не реалізований
-            # (для зворотної сумісності), пропускаємо цей крок
-            self.logger.debug(
-                "Database doesn't support get_active_repeated_messages_for_channel, "
-                "skipping previous repeats cleanup"
+            # Clean up channel tracking
+            channel_tasks = self._channel_tasks.get(original_channel, set())
+            channel_tasks.discard(task_key)
+            if not channel_tasks:
+                self._channel_tasks.pop(original_channel, None)
+            
+            self.logger.info(
+                f"Stopped previous repeat for channel {original_channel} -> {target_chat}"
             )
-        except Exception as e:
-            self.logger.error(f"Error stopping previous repeats: {e}", exc_info=True)
     
     async def process_pending_repeats(self) -> None:
         """
-        Обробка всіх повідомлень, які потребують повторення
+        Process all messages that need repetition
         """
-        try:
-            pending_messages = await self.database.get_pending_repeated_messages()
-            
-            if not pending_messages:
-                return
-            
-            self.logger.info(f"Processing {len(pending_messages)} pending repeat messages")
-            
-            for repeated_msg in pending_messages:
-                await self._process_single_repeat(repeated_msg)
-                
-        except Exception as e:
-            self.logger.error(f"Error processing pending repeats: {e}", exc_info=True)
+        if not self._repeat_tasks:
+            return
+        
+        now = datetime.now()
+        pending_tasks = [
+            task for task in self._repeat_tasks.values()
+            if task.next_repeat_time <= now
+        ]
+        
+        if not pending_tasks:
+            return
+        
+        self.logger.info(f"Processing {len(pending_tasks)} pending repeat messages")
+        
+        for task in pending_tasks:
+            await self._process_single_repeat(task)
     
-    async def _process_single_repeat(self, repeated_msg: RepeatedMessage) -> None:
+    async def _process_single_repeat(self, task: RepeatTask) -> None:
         """
-        Обробка одного повторюваного повідомлення
+        Process single repeated message
         
         Args:
-            repeated_msg: Повторюване повідомлення для обробки
+            task: Repeat task to process
         """
         try:
-            target_config = repeated_msg.target_configs
-            target_chat = target_config["target_chat"]
-            message_data = repeated_msg.message_data
-            
-            # Якщо повідомлення має медіа, спочатку отримуємо оригінальне повідомлення
-            if message_data.get("has_media", False):
+            # If message has media, try to get original message first
+            if task.has_media:
                 try:
-                    # Отримуємо оригінальне повідомлення з медіа
+                    # Get original message with media
                     original_message = await self.client.get_messages(
-                        entity=message_data["original_chat_id"],
-                        ids=message_data["original_message_id"]
+                        entity=task.original_channel,
+                        ids=task.original_id
                     )
                     
                     if original_message and original_message.media:
-                        # Відправляємо з медіа
+                        # Send with media
                         await send_file(
                             self.client,
-                            entity=target_chat,
+                            entity=task.target_chat,
                             file=original_message.media,
-                            caption=message_data["raw_text"] or message_data["text"],
-                            reply_to=target_config.get("to_topic_id"),
+                            caption=task.message_raw_text or task.message_text,
+                            reply_to=task.to_topic_id,
                         )
                     else:
-                        # Медіа не знайдено, відправляємо тільки текст
+                        # Media not found, send text only
                         self.logger.warning(
-                            f"Media not found for repeated message {repeated_msg.original_id}, "
+                            f"Media not found for repeated message {task.original_id}, "
                             f"sending text only"
                         )
                         await send_message(
                             self.client,
-                            entity=target_chat,
-                            message=message_data["raw_text"] or message_data["text"],
-                            reply_to=target_config.get("to_topic_id"),
+                            entity=task.target_chat,
+                            message=task.message_raw_text or task.message_text,
+                            reply_to=task.to_topic_id,
                         )
                         
                 except Exception as media_error:
                     self.logger.error(
-                        f"Error getting media for repeated message {repeated_msg.original_id}: {media_error}, "
+                        f"Error getting media for repeated message {task.original_id}: {media_error}, "
                         f"sending text only"
                     )
-                    # Якщо не вдалося отримати медіа, відправляємо тільки текст
+                    # If failed to get media, send text only
                     await send_message(
                         self.client,
-                        entity=target_chat,
-                        message=message_data["raw_text"] or message_data["text"],
-                        reply_to=target_config.get("to_topic_id"),
+                        entity=task.target_chat,
+                        message=task.message_raw_text or task.message_text,
+                        reply_to=task.to_topic_id,
                     )
             else:
-                # Відправляємо звичайне текстове повідомлення
+                # Send regular text message
                 await send_message(
                     self.client,
-                    entity=target_chat,
-                    message=message_data["raw_text"] or message_data["text"],
-                    reply_to=target_config.get("to_topic_id"),
+                    entity=task.target_chat,
+                    message=task.message_raw_text or task.message_text,
+                    reply_to=task.to_topic_id,
                 )
             
-            new_repeat_count = repeated_msg.repeat_count + 1
+            new_repeat_count = task.repeat_count + 1
             
             self.logger.info(
-                f"Repeated message {repeated_msg.original_id} from chat {repeated_msg.original_channel} "
-                f"to chat {target_chat}, repeat #{new_repeat_count}"
+                f"Repeated message {task.original_id} from chat {task.original_channel} "
+                f"to chat {task.target_chat}, repeat #{new_repeat_count} (infinite mode)"
             )
             
-            # Перевіряємо, чи потрібно планувати наступне повторення
-            max_repeats = repeated_msg.max_repeats
-            if max_repeats is None or new_repeat_count < max_repeats:
-                # Плануємо наступне повторення з новим рандомізованим інтервалом
-                base_interval = target_config.get("base_repeat_interval", 
-                                                target_config.get("repeat_interval", 3600))
-                randomized_interval = self._randomize_interval(base_interval)
-                next_repeat_time = datetime.now() + timedelta(seconds=randomized_interval)
-                
-                # Оновлюємо конфігурацію з новим рандомізованим інтервалом
-                updated_target_config = target_config.copy()
-                updated_target_config["repeat_interval"] = randomized_interval
-                
-                updated_msg = repeated_msg._replace(
-                    repeat_count=new_repeat_count,
-                    next_repeat_time=next_repeat_time,
-                    target_configs=updated_target_config
-                )
-                
-                await self.database.update_repeated_message(updated_msg)
-                
-                self.logger.info(
-                    f"Scheduled next repeat for message {repeated_msg.original_id} "
-                    f"at {next_repeat_time} (interval: {randomized_interval}s, base: {base_interval}s)"
-                )
-            else:
-                # Досягнуто максимальну кількість повторень
-                await self.database.delete_repeated_message(repeated_msg.id)
-                
-                self.logger.info(
-                    f"Completed all repeats for message {repeated_msg.original_id} "
-                    f"(total: {new_repeat_count})"
-                )
+            # Schedule next repeat with new randomized interval (infinite retries)
+            randomized_interval = self._randomize_interval(task.base_repeat_interval)
+            next_repeat_time = datetime.now() + timedelta(seconds=randomized_interval)
+            
+            # Update task for next repeat
+            task.repeat_count = new_repeat_count
+            task.repeat_interval = randomized_interval
+            task.next_repeat_time = next_repeat_time
+            
+            self.logger.info(
+                f"Scheduled next infinite repeat for message {task.original_id} "
+                f"at {next_repeat_time} (interval: {randomized_interval}s, base: {task.base_repeat_interval}s)"
+            )
                 
         except Exception as e:
             self.logger.error(
-                f"Error processing repeat for message {repeated_msg.original_id}: {e}",
+                f"Error processing repeat for message {task.original_id}: {e}",
                 exc_info=True
             )
             
-            # У випадку помилки, можемо спробувати пізніше з рандомізованим інтервалом
+            # In case of error, try again later with randomized interval
             retry_interval = self._randomize_interval(300)  # 5 minutes ± random
             next_retry_time = datetime.now() + timedelta(seconds=retry_interval)
-            updated_msg = repeated_msg._replace(next_repeat_time=next_retry_time)
+            task.next_repeat_time = next_retry_time
             
-            try:
-                await self.database.update_repeated_message(updated_msg)
-                self.logger.info(f"Rescheduled failed repeat for {retry_interval}s")
-            except Exception as retry_error:
-                self.logger.error(f"Failed to reschedule failed repeat: {retry_error}")
+            self.logger.info(f"Rescheduled failed repeat for {retry_interval}s")
     
     async def start_scheduler(self) -> None:
         """
-        Запуск планувальника повторень
+        Start repeat scheduler
         """
         if self.running:
             self.logger.warning("Repeat scheduler is already running")
             return
         
         self.running = True
-        self.logger.info(f"Starting repeat scheduler with {self.check_interval}s interval")
+        self.logger.info(f"Starting infinite repeat scheduler with {self.check_interval}s interval")
         
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
     
     async def stop_scheduler(self) -> None:
         """
-        Зупинка планувальника повторень
+        Stop repeat scheduler
         """
         if not self.running:
             return
@@ -342,10 +313,14 @@ class MessageRepeater:
                 await self._scheduler_task
             except asyncio.CancelledError:
                 pass
+        
+        # Clear all repeat tasks
+        self._repeat_tasks.clear()
+        self._channel_tasks.clear()
     
     async def _scheduler_loop(self) -> None:
         """
-        Основний цикл планувальника
+        Main scheduler loop
         """
         while self.running:
             try:

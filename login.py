@@ -16,7 +16,7 @@ from telethon.tl.types import Chat, Channel, User
 import asyncio
 
 async def main():
-    # Створюємо TelegramClient з або без proxy
+    # Create TelegramClient with or without proxy
     if proxy_config:
         client = TelegramClient(
             session=StringSession(), api_id=int(API_ID), api_hash=API_HASH, proxy=proxy_config
@@ -27,17 +27,17 @@ async def main():
         )
     
     async with client:
-        # Отримуємо session string
+        # Get session string
         session_string = client.session.save()
         print("Session string: ", session_string)
         print("\n" + "="*50)
-        print("СПИСОК УСІХ ЧАТІВ:")
+        print("LIST OF ALL CHATS:")
         print("="*50)
         
-        # Отримуємо всі діалоги
+        # Get all dialogs
         dialogs = await client.get_dialogs()
         
-        # Групуємо чати за типами
+        # Group chats by types
         private_chats = []
         groups = []
         channels = []
@@ -74,9 +74,9 @@ async def main():
                         'members_count': getattr(entity, 'participants_count', 'N/A')
                     })
         
-        # Виводимо приватні чати
+        # Display private chats
         if private_chats:
-            print(f"\n📱 ПРИВАТНІ ЧАТИ ({len(private_chats)}):")
+            print(f"\n📱 PRIVATE CHATS ({len(private_chats)}):")
             print("-" * 50)
             chat_names = []
             for chat in private_chats:
@@ -84,28 +84,28 @@ async def main():
                 chat_names.append(f"{chat['title']}{username_info} (ID: {chat['id']})")
             print(", ".join(chat_names))
         
-        # Виводимо групи
+        # Display groups
         if groups:
-            print(f"\n👥 ГРУПИ ({len(groups)}):")
+            print(f"\n👥 GROUPS ({len(groups)}):")
             print("-" * 50)
             group_names = []
             for group in groups:
                 username_info = f" (@{group['username']})" if group.get('username') else ""
-                group_names.append(f"{group['title']}{username_info} (ID: {group['id']}, Учасників: {group['members_count']})")
+                group_names.append(f"{group['title']}{username_info} (ID: {group['id']}, Members: {group['members_count']})")
             print(", ".join(group_names))
         
-        # Виводимо канали
+        # Display channels
         if channels:
-            print(f"\n📢 КАНАЛИ ({len(channels)}):")
+            print(f"\n📢 CHANNELS ({len(channels)}):")
             print("-" * 50)
             channel_names = []
             for channel in channels:
                 username_info = f" (@{channel['username']})" if channel['username'] else ""
-                channel_names.append(f"{channel['title']}{username_info} (ID: {channel['id']}, Підписників: {channel['subscribers']})")
+                channel_names.append(f"{channel['title']}{username_info} (ID: {channel['id']}, Subscribers: {channel['subscribers']})")
             print(", ".join(channel_names))
         
         print("\n" + "="*50)
-        print(f"ЗАГАЛОМ ЧАТІВ: {len(dialogs)}")
+        print(f"TOTAL CHATS: {len(dialogs)}")
         print("="*50)
 
 if __name__ == "__main__":

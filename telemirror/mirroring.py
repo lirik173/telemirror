@@ -18,7 +18,6 @@ from telemirror.hints import EventAlbumMessage, EventLike, EventMessage
 from telemirror.messagefilters.base import FilterAction
 from telemirror.mixins import CopyEventMessage
 from telemirror.repeater import MessageRepeater
-from telemirror.storage import Database, MirrorMessage
 
 
 class EventProcessor(CopyEventMessage):
@@ -27,23 +26,20 @@ class EventProcessor(CopyEventMessage):
     def __init__(
         self: "EventProcessor",
         chat_mapping: Dict[int, Dict[int, List[DirectionConfig]]],
-        database: Database,
         client: TelegramClient,
         logger: logging.Logger,
     ) -> None:
         """Message event processor
 
         Args:
-            chat_mapping (`Dict[int, Dict[int, List[DirectionConfig]]]`): Chats mappings
-            database (`Database`): Message IDs storage
-            client (`TelegramClient`): Message sender client
-            logger (`logging.Logger`): Logger
+            chat_mapping (Dict[int, Dict[int, List[DirectionConfig]]]): Chats mappings
+            client (TelegramClient): Message sender client
+            logger (logging.Logger): Logger
         """
         self._chat_mapping = chat_mapping
-        self._database = database
         self._client = client
         self._logger = logger
-        self._repeater = MessageRepeater(database, client, logger)
+        self._repeater = MessageRepeater(client, logger)
 
     @staticmethod
     def __handle_exceptions(fn):
@@ -76,17 +72,6 @@ class EventProcessor(CopyEventMessage):
             return
 
         self._logger.info(f"[New message]: {message_link}")
-
-        reply_to_messages: dict[int, int] = (
-            {
-                m.mirror_channel: m.mirror_id
-                for m in await self._database.get_messages(
-                    message.reply_to_msg_id, chat_id
-                )
-            }
-            if message.is_reply
-            else {}
-        )
 
         # Copy quiz poll as simple poll
         if isinstance(message.media, types.MessageMediaPoll):
@@ -140,11 +125,6 @@ class EventProcessor(CopyEventMessage):
                     )
                     continue
 
-                outgoing_topic_reply = (
-                    reply_to_messages.get(outgoing_chat) is not None
-                    and config.to_topic_id is not None
-                )
-
                 outgoing_message: types.Message = None
                 try:
                     outgoing_message = (
@@ -153,12 +133,8 @@ class EventProcessor(CopyEventMessage):
                             entity=outgoing_chat,
                             message=filtered_message,
                             formatting_entities=filtered_message.entities,
-                            reply_to=reply_to_messages.get(outgoing_chat)
-                            if outgoing_topic_reply or config.to_topic_id is None
-                            else config.to_topic_id,
-                            reply_to_topic_id=config.to_topic_id
-                            if outgoing_topic_reply
-                            else None,
+                            reply_to=config.to_topic_id,
+                            reply_to_topic_id=config.to_topic_id,
                         )
                         if config.mode == "copy"
                         else await forward_messages(
@@ -178,16 +154,7 @@ class EventProcessor(CopyEventMessage):
                     continue
 
                 if outgoing_message:
-                    await self._database.insert(
-                        MirrorMessage(
-                            original_id=filtered_message.id,
-                            original_channel=chat_id,
-                            mirror_id=outgoing_message.id,
-                            mirror_channel=outgoing_chat,
-                        )
-                    )
-                    
-                    # Планування повторення повідомлення, якщо налаштовано
+                    # Schedule message repetition if configured
                     if config.repeat_interval and config.repeat_interval > 0:
                         await self._repeater.schedule_repeat(
                             message=filtered_message,
@@ -212,17 +179,6 @@ class EventProcessor(CopyEventMessage):
             return
 
         self._logger.info(f"[New album]: {album_link}")
-
-        reply_to_messages: dict[int, int] = (
-            {
-                m.mirror_channel: m.mirror_id
-                for m in await self._database.get_messages(
-                    incoming_first_message.reply_to_msg_id, chat_id
-                )
-            }
-            if incoming_first_message.is_reply
-            else {}
-        )
 
         for outgoing_chat, configs in outgoing_chats.items():
             for config in configs:
@@ -273,19 +229,12 @@ class EventProcessor(CopyEventMessage):
                     )
                     continue
 
-                idxs: List[int] = []
                 files: List[types.TypeMessageMedia] = []
                 captions: List[str] = []
                 for incoming_message in filtered_album:
-                    idxs.append(incoming_message.id)
                     files.append(incoming_message.media)
                     # Pass unparsed text, since: https://github.com/LonamiWebs/Telethon/issues/3065
                     captions.append(incoming_message.text)
-
-                outgoing_topic_reply = (
-                    reply_to_messages.get(outgoing_chat) is not None
-                    and config.to_topic_id is not None
-                )
 
                 outgoing_messages: List[types.Message] = None
                 try:
@@ -295,12 +244,8 @@ class EventProcessor(CopyEventMessage):
                             entity=outgoing_chat,
                             caption=captions,
                             file=files,
-                            reply_to=reply_to_messages.get(outgoing_chat)
-                            if outgoing_topic_reply or config.to_topic_id is None
-                            else config.to_topic_id,
-                            reply_to_topic_id=config.to_topic_id
-                            if outgoing_topic_reply
-                            else None,
+                            reply_to=config.to_topic_id,
+                            reply_to_topic_id=config.to_topic_id,
                         )
                         if config.mode == "copy"
                         else await forward_messages(
@@ -321,155 +266,15 @@ class EventProcessor(CopyEventMessage):
 
                 # Expect non-empty list of messages
                 if utils.is_list_like(outgoing_messages):
-                    await self._database.insert_batch(
-                        [
-                            MirrorMessage(
-                                original_id=idxs[message_index],
-                                original_channel=chat_id,
-                                mirror_id=outgoing_message.id,
-                                mirror_channel=outgoing_chat,
-                            )
-                            for message_index, outgoing_message in enumerate(
-                                outgoing_messages
-                            )
-                        ]
-                    )
-                    
-                    # Планування повторення альбому, якщо налаштовано
+                    # Schedule album repetition if configured
                     if config.repeat_interval and config.repeat_interval > 0:
-                        # Для альбому плануємо повторення тільки першого повідомлення
+                        # For album, schedule repetition only for the first message
                         first_message = filtered_album[0]
                         await self._repeater.schedule_repeat(
                             message=first_message,
                             config=config,
                             target_chat=outgoing_chat
                         )
-
-    @__handle_exceptions
-    async def edit_message(
-        self: "EventProcessor", chat_id: int, message: EventMessage, message_link: str
-    ):
-        outgoing_messages = await self._database.get_messages(message.id, chat_id)
-        if not outgoing_messages:
-            self._logger.warning(
-                f"[Edit message]: No target messages to edit for {message_link}"
-            )
-            return
-
-        self._logger.info(f"[Edit message]: {message_link}")
-
-        for outgoing_message in outgoing_messages:
-            configs = self._chat_mapping.get(chat_id, {}).get(
-                outgoing_message.mirror_channel
-            )
-
-            if configs is None:
-                self._logger.warning(
-                    f"[Edit message]: No direction configs for "
-                    f"{chat_id}->{outgoing_message.mirror_channel}"
-                )
-                continue
-
-            for config in configs:
-                if config.disable_edit is True or config.mode == "forward":
-                    continue
-
-                filter_action, filtered_message = await config.filters.process(
-                    self.copy_message(message), events.MessageEdited.Event
-                )
-                if filter_action is FilterAction.DISCARD or filter_action is False:
-                    self._logger.info(
-                        f"[Edit message]: Message {message_link} was skipped "
-                        f"by the filter for chat#{outgoing_message.mirror_channel}"
-                    )
-                    continue
-
-                # Prevent `MediaPrevInvalidError`: The old media cannot be edited
-                # with anything else (such as stickers or voice notes).
-                edit_media_allowed = (
-                    not isinstance(filtered_message.media, types.MessageMediaDocument)
-                    or not isinstance(filtered_message.media.document, types.Document)
-                    or not any(
-                        isinstance(attr, types.DocumentAttributeAudio)
-                        and attr.voice is True
-                        for attr in filtered_message.media.document.attributes
-                    )
-                )
-                try:
-                    await self._client.edit_message(
-                        entity=outgoing_message.mirror_channel,
-                        message=outgoing_message.mirror_id,
-                        text=filtered_message.message,
-                        formatting_entities=filtered_message.entities,
-                        file=filtered_message.media if edit_media_allowed else None,
-                        link_preview=isinstance(
-                            filtered_message.media, types.MessageMediaWebPage
-                        ),
-                    )
-                except errors.MessageNotModifiedError:
-                    self._logger.warning(
-                        f"Suppressed MessageNotModifiedError for message "
-                        f"{outgoing_message.mirror_channel}#{outgoing_message.mirror_id}"
-                    )
-
-                except Exception as e:
-                    self._logger.error(
-                        f"Error while editing message "
-                        f"{outgoing_message.mirror_channel}#{outgoing_message.mirror_id}. "
-                        f"{type(e).__name__}: {e}"
-                    )
-
-    @__handle_exceptions
-    async def delete_message(
-        self: "EventProcessor", chat_id: int, message_ids: List[int]
-    ) -> None:
-        deleting_messages = await self._database.get_messages_batch(
-            message_ids, chat_id
-        )
-        if not deleting_messages:
-            self._logger.warning(
-                f"[Delete message]: No target messages to delete for chat#{chat_id}"
-            )
-            return
-
-        self._logger.info(
-            f"[Delete message]: Delete {len(message_ids)} messages from {chat_id}"
-        )
-
-        deleting_per_channel: Dict[int, List[int]] = {}
-
-        for deleting_message in deleting_messages:
-            configs = self._chat_mapping.get(chat_id, {}).get(
-                deleting_message.mirror_channel
-            )
-
-            if configs is None:
-                self._logger.warning(
-                    f"[Delete message]: No direction configs for "
-                    f"{chat_id}->{deleting_message.mirror_channel}"
-                )
-                continue
-
-            for config in configs:
-                if config.disable_delete is True:
-                    continue
-
-                deleting_per_channel.setdefault(
-                    deleting_message.mirror_channel, []
-                ).append(deleting_message.mirror_id)
-
-        for channel_id, message_ids in deleting_per_channel.items():
-            try:
-                await self._client.delete_messages(
-                    entity=channel_id, message_ids=message_ids
-                )
-            except Exception as e:
-                self._logger.error(
-                    f"Error while deleting messages from chat#{channel_id}. "
-                    f"{type(e).__name__}: {e}"
-                )
-
-        await self._database.delete_messages_batch(message_ids, chat_id)
 
 
 class EventHandlers:
@@ -482,18 +287,13 @@ class EventHandlers:
         """Message event handler
 
         Args:
-            client (`TelegramClient`): Message receiver client
-            chats (`List[int]`): List of chats to be observed
-            processor (`EventProcessor`): Event processor
+            client (TelegramClient): Message receiver client
+            chats (List[int]): List of chats to be observed
+            processor (EventProcessor): Event processor
         """
         client.add_event_handler(self.on_new_message, events.NewMessage(chats=chats))
         client.add_event_handler(self.on_album, events.Album(chats=chats))
-        client.add_event_handler(
-            self.on_edit_message, events.MessageEdited(chats=chats)
-        )
-        client.add_event_handler(
-            self.on_deleted_message, events.MessageDeleted(chats=chats)
-        )
+        # Note: Edit and delete handlers removed - no longer supported
         self._processor = processor
 
     def event_message_link(self: "EventHandlers", event: EventLike) -> str:
@@ -542,43 +342,11 @@ class EventHandlers:
             album_link=incoming_album_link,
         )
 
-    async def on_edit_message(
-        self: "EventHandlers", event: events.MessageEdited.Event
-    ) -> None:
-        """MessageEdited event handler"""
-
-        # Skip updates with edit_hide attribute (reactions and so on...)
-        if event.message.edit_hide is True:
-            return
-
-        incoming_chat_id: int = event.chat_id
-        incoming_message: EventMessage = event.message
-        incoming_message_link: str = self.event_message_link(event)
-
-        await self._processor.edit_message(
-            chat_id=incoming_chat_id,
-            message=incoming_message,
-            message_link=incoming_message_link,
-        )
-
-    async def on_deleted_message(
-        self: "EventHandlers", event: events.MessageDeleted.Event
-    ) -> None:
-        """MessageDeleted event handler"""
-
-        incoming_chat_id: int = event.chat_id
-        deleted_ids: List[int] = event.deleted_ids
-
-        await self._processor.delete_message(
-            chat_id=incoming_chat_id, message_ids=deleted_ids
-        )
-
 
 class Mirroring:
     def __init__(
         self: "Mirroring",
         chat_mapping: Dict[int, Dict[int, List[DirectionConfig]]],
-        database: Database,
         receiver: TelegramClient,
         sender: TelegramClient,
         logger: Union[str, logging.Logger] = None,
@@ -586,20 +354,17 @@ class Mirroring:
         """Configure channels mirroring
 
         Args:
-            chat_mapping (`Dict[int, Dict[int, List[DirectionConfig]]]`): Chats mappings
-            database (`Database`): Message IDs storage
-            receiver (`TelegramClient`): Message receiver client
-            sender (`TelegramClient`): Message sender client, can be same as `receiver`
-            logger (`str` | `logging.Logger`, optional): Logger. Defaults to None.
+            chat_mapping (Dict[int, Dict[int, List[DirectionConfig]]]): Chats mappings
+            receiver (TelegramClient): Message receiver client
+            sender (TelegramClient): Message sender client, can be same as `receiver`
+            logger (str | logging.Logger, optional): Logger. Defaults to None.
         """
         self._chat_mapping = chat_mapping
-        self._database = database
         self._receiver = receiver
         self._sender = sender
 
         self._processor = EventProcessor(
             chat_mapping=chat_mapping,
-            database=database,
             client=sender,
             logger=logger,
         )
@@ -636,7 +401,7 @@ class Mirroring:
             ]
         )
 
-        return f"Mirror mapping: \n{mirror_mapping}\nUsing database: {self._database}\n"
+        return f"Mirror mapping: \n{mirror_mapping}\nDatabase: None (removed)\n"
 
     async def __connect_client(self: "Mirroring", client: TelegramClient) -> None:
         try:
@@ -694,20 +459,18 @@ class Telemirror:
         api_hash: str,
         session_string: str,
         chat_mapping: Dict[int, Dict[int, List[DirectionConfig]]],
-        database: Database,
         logger: Union[str, logging.Logger] = None,
         proxy: Optional[str] = None,
     ):
         """Telemirror
 
         Args:
-            api_id (`str`): Telegram API id
-            api_hash (`str`): Telegram API hash
-            session_string (`str`): Telegram (telethon) session string
-            chat_mapping (`Dict[int, Dict[int, List[DirectionConfig]]]`): Chats mappings
-            database (`Database`): Message IDs storage
-            logger (`str` | `logging.Logger`, optional): Logger. Defaults to None.
-            proxy (`str`, optional): Proxy for TelegramClient. Defaults to None.
+            api_id (str): Telegram API id
+            api_hash (str): Telegram API hash
+            session_string (str): Telegram (telethon) session string
+            chat_mapping (Dict[int, Dict[int, List[DirectionConfig]]]): Chats mappings
+            logger (str | logging.Logger, optional): Logger. Defaults to None.
+            proxy (str, optional): Proxy for TelegramClient. Defaults to None.
         """
         patch_input_media_with_spoiler()
         set_album_event_timeout(delay_sec=1.01)
@@ -734,7 +497,6 @@ class Telemirror:
 
         self._mirroring = Mirroring(
             chat_mapping=chat_mapping,
-            database=database,
             receiver=recv_client,
             sender=send_client,
             logger=logger,
